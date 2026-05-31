@@ -1,0 +1,6 @@
+{
+  "name": "MineBot Host",
+  "description": "Host and manage offline Minecraft bots with custom scripts, real-time logs, anti-AFK, and resource monitors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
