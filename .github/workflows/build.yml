@@ -17,6 +17,9 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Create Fake Env File
+        run: echo "GEMINI_API_KEY=fake_key_for_building" > .env
+
       - name: Make Gradlew Executable
         run: chmod +x ./gradlew
 
