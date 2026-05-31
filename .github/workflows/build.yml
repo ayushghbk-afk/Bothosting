@@ -21,13 +21,19 @@ jobs:
         run: echo "GEMINI_API_KEY=fake_key_for_building" > .env
 
       - name: Make Gradlew Executable
-        run: chmod +x ./gradlew
+        run: |
+          if [ -f "./gradlew" ]; then chmod +x ./gradlew;
+          elif [ -f "./gradle/gradlew" ]; then chmod +x ./gradle/gradlew;
+          fi
 
       - name: Build APK
-        run: ./gradlew assembleDebug
+        run: |
+          if [ -f "./gradlew" ]; then ./gradlew assembleDebug;
+          elif [ -f "./gradle/gradlew" ]; then ./gradle/gradlew assembleDebug;
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: my-ai-app
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/build/outputs/apk/debug/*.apk"
