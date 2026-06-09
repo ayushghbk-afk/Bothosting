@@ -20,5 +20,7 @@ data class BotConfig(
     val avatarType: String = "STEVE", // "STEVE", "ALEX", "CREEPER", "ENDERMAN", "ROBOT", "WIZARD"
     val themeColorHex: String = "#6750A4", // Default M3 primary Indigo/Purple
     val customStatus: String = "READY", // Custom action statuses
-    val triggerResponses: String = "hi:::Hello! I am online and managing chunks.;;;help:::I am a custom MineBot client. Type messages to chat with me.;;;status:::Host environment: Android Sandbox. Battery: Nominal. CPU: 1.25%."
+    val triggerResponses: String = "hi:::Hello! I am online and managing chunks.;;;help:::I am a custom MineBot client. Type messages to chat with me.;;;status:::Host environment: Android Sandbox. Battery: Nominal. CPU: 1.25%.",
+    val aiAutoReplyEnabled: Boolean = false,
+    val aiPersonality: String = "Friendly builder bot who loves mining diamonds"
 )

@@ -1,39 +1,49 @@
-name: Build Android APK
-on: [push, workflow_dispatch]
+name: Android CI/CD Build
+
+on:
+  push:
+    branches: [ "main", "master", "develop" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build:
+    name: Build Debug APK
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    - name: Checkout codebase
+      uses: actions/checkout@v4
 
-      - name: Set up Java JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+    - name: Setup Gradle Build Environment
+      uses: gradle/actions/setup-gradle@v3
 
-      - name: Create Fake Env File
-        run: echo "GEMINI_API_KEY=fake_key_for_building" > .env
+    - name: Grant execute permission for gradlew
+      run: |
+        if [ -f "./gradlew" ]; then
+          chmod +x gradlew
+        else
+          echo "No gradlew found; will fallback to system gradle execution."
+        fi
 
-      - name: Make Gradlew Executable
-        run: |
-          if [ -f "./gradlew" ]; then chmod +x ./gradlew;
-          elif [ -f "./gradle/gradlew" ]; then chmod +x ./gradle/gradlew;
-          fi
+    - name: Compile and Assemble Debug APK
+      run: |
+        if [ -f "./gradlew" ]; then
+          ./gradlew assembleDebug --stacktrace
+        else
+          gradle assembleDebug --stacktrace
+        fi
 
-      - name: Build APK
-        run: |
-          if [ -f "./gradlew" ]; then ./gradlew assembleDebug;
-          elif [ -f "./gradle/gradlew" ]; then ./gradle/gradlew assembleDebug;
-          fi
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: my-ai-app
-          path: "**/build/outputs/apk/debug/*.apk"
+    - name: Upload Finished APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MineBotCompanion-DebugAPK
+        path: app/build/outputs/apk/debug/app-debug.apk
+        if-no-files-found: error

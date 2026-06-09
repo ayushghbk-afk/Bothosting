@@ -41,6 +41,10 @@ class MineBotService : Service() {
         val botId = intent?.getIntExtra(EXTRA_BOT_ID, -1) ?: -1
 
         if (action == ACTION_START && botId != -1) {
+            // 1. Guarantee immediate startForeground call to satisfy OS contract
+            showForegroundNotification("MineBot Host Active", "Initializing bot sandbox...")
+
+            // 2. Launch asynchronously
             serviceScope.launch {
                 val config = database.botConfigDao().getConfigById(botId)
                 if (config != null) {
@@ -50,14 +54,17 @@ class MineBotService : Service() {
                         null
                     }
                     launchBotInstance(config, scriptContent)
+                } else {
+                    // Config was not found, update foreground state just in case
+                    updateForegroundState()
                 }
             }
         } else if (action == ACTION_STOP && botId != -1) {
             stopBotInstance(botId)
+        } else {
+            // General status check
+            updateForegroundState()
         }
-
-        // If at least one bot is running, show the persistent notification. Otherwise stop service.
-        updateForegroundState()
 
         return START_NOT_STICKY
     }
@@ -104,7 +111,11 @@ class MineBotService : Service() {
                 _botStats.value = _botStats.value.toMutableMap().apply {
                     put(config.id, BotStats(cpu, ram, ping))
                 }
-            }
+            },
+            aiAutoReplyEnabled = config.aiAutoReplyEnabled,
+            aiPersonality = config.aiPersonality,
+            geminiApiKey = com.example.BuildConfig.GEMINI_API_KEY,
+            version = config.version
         )
 
         activeClients[config.id] = client
@@ -126,14 +137,39 @@ class MineBotService : Service() {
         updateForegroundState()
     }
 
+    private fun showForegroundNotification(title: String, text: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    buildNotification(title, text),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, buildNotification(title, text))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun updateForegroundState() {
         val runningCount = _runningBotIds.value.size
         if (runningCount > 0) {
             val title = "MineBot Host Active"
             val text = "$runningCount Minecraft bot(s) hosting online 24/7."
-            startForeground(NOTIFICATION_ID, buildNotification(title, text))
+            showForegroundNotification(title, text)
         } else {
-            stopForeground(true)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } else {
+                    @Suppress("DEPRECATION")
+                    stopForeground(true)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             stopSelf()
         }
     }
@@ -148,7 +184,7 @@ class MineBotService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+            .setSmallIcon(android.R.drawable.sym_def_app_icon)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

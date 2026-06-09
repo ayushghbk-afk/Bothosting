@@ -2,6 +2,7 @@ package com.example.protocol
 
 import android.util.Log
 import kotlinx.coroutines.*
+import okhttp3.MediaType.Companion.toMediaType
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -25,7 +26,11 @@ class MinecraftJavaClient(
     private val triggerResponses: String = "",
     private val onLog: (message: String, type: String) -> Unit,
     private val onStatusChange: (status: String) -> Unit,
-    private val onStatsUpdate: (cpu: Double, ram: Double, ping: Int) -> Unit
+    private val onStatsUpdate: (cpu: Double, ram: Double, ping: Int) -> Unit,
+    private val aiAutoReplyEnabled: Boolean = false,
+    private val aiPersonality: String = "",
+    private val geminiApiKey: String = "",
+    private val version: String = "1.20.4"
 ) {
     private var job: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -94,12 +99,13 @@ class MinecraftJavaClient(
                 val out = clientSocket.getOutputStream()
                 val ins = clientSocket.getInputStream()
                 
-                onLog("Connection active! Sending Minecraft offline Handshake packet (Protocol #765)...", "INFO")
+                val protocolVer = getProtocolVersion(version)
+                onLog("Connection active! Sending Minecraft offline Handshake packet (Protocol #$protocolVer for version $version)...", "INFO")
                 // Handshake Packet
-                // VarInt: Length, VarInt: PacketID 0x00, VarInt: Protocol 765, String: ServerAddress, UShort: ServerPort, VarInt: NextState (2 for Login)
+                // VarInt: Length, VarInt: PacketID 0x00, VarInt: Protocol, String: ServerAddress, UShort: ServerPort, VarInt: NextState (2 for Login)
                 val handshakeBytes = ByteArrayOutputStream()
                 writeVarInt(handshakeBytes, 0x00) // Packet ID
-                writeVarInt(handshakeBytes, 765)  // 1.20.4 Protocol Version
+                writeVarInt(handshakeBytes, protocolVer)  // Protocol Version
                 writeString(handshakeBytes, address)
                 handshakeBytes.write((port ushr 8) and 0xFF)
                 handshakeBytes.write(port and 0xFF)
@@ -109,11 +115,17 @@ class MinecraftJavaClient(
                 
                 onLog("Handshake successfully handshake-verified. Sending Login Start packet...", "INFO")
                 // Login Start Packet
-                // VarInt: Length, VarInt: PacketID 0x00, String: Username, UUID: (null/offline)
+                // VarInt: Length, VarInt: PacketID 0x00, String: Username, Optional: Boolean HasUUID (1.19.3 - 1.20.1), UUID: 16 bytes
                 val loginStartBytes = ByteArrayOutputStream()
                 writeVarInt(loginStartBytes, 0x00) // Packet ID
                 writeString(loginStartBytes, username)
-                // Offline mode uuid can be random or absent depending on exact version. Let's send a standard dummy UUID
+                
+                // UUID handling based on protocol version
+                if (protocolVer >= 761 && protocolVer < 764) {
+                    // Minecraft 1.19.3 to 1.20.1: requires 1 byte true indicator (0x01) before the 16 bytes UUID
+                    loginStartBytes.write(1)
+                }
+                
                 loginStartBytes.write(LongToBytes(Random.nextLong())) // Most sig bits
                 loginStartBytes.write(LongToBytes(Random.nextLong())) // Least sig bits
                 
@@ -289,6 +301,83 @@ class MinecraftJavaClient(
                     delay(500 + Random.nextLong(600))
                     sendChatMessage(reply)
                 }
+                return
+            }
+        }
+
+        // Auto AI Responder Chat Feature
+        if (aiAutoReplyEnabled && geminiApiKey.isNotBlank() && geminiApiKey != "MY_GEMINI_API_KEY") {
+            scope.launch {
+                try {
+                    val systemPrompt = "You are a Minecraft host companion bot named '$username' connected to server address '$address'. Personality preset: '$aiPersonality'. Formulate a quick, lively, conversational response in standard Minecraft chat to what $sender just typed. Ensure your response is highly specific to Minecraft or their statement, fits in standard 1-line chat, and is STRICTLY under 70 characters. Do NOT use markdown or quotes."
+                    val requestPayload = """
+                        {
+                          "contents": [
+                            {
+                              "parts": [
+                                {
+                                  "text": "$sender says: $trimmed"
+                                }
+                              ]
+                            }
+                          ],
+                          "systemInstruction": {
+                            "parts": [
+                              {
+                                "text": "${systemPrompt.replace("\"", "\\\"").replace("\n", " ")}"
+                              }
+                            ]
+                          },
+                          "generationConfig": {
+                            "temperature": 0.7,
+                            "maxOutputTokens": 45
+                          }
+                        }
+                    """.trimIndent()
+
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    val mediaType = "application/json; charset=utf-8".toMediaType()
+                    val body = okhttp3.RequestBody.create(mediaType, requestPayload)
+                    val request = okhttp3.Request.Builder()
+                        .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$geminiApiKey")
+                        .post(body)
+                        .header("Content-Type", "application/json")
+                        .build()
+
+                    val replyRaw = withContext(Dispatchers.IO) {
+                        client.newCall(request).execute().use { response ->
+                            if (!response.isSuccessful) return@use ""
+                            val responseString = response.body?.string() ?: ""
+                            var textVal = ""
+                            val textToken = "\"text\":"
+                            val textStartIndex = responseString.indexOf(textToken)
+                            if (textStartIndex != -1) {
+                                val valStartIndex = responseString.indexOf('"', textStartIndex + textToken.length)
+                                if (valStartIndex != -1) {
+                                    val valEndIndex = responseString.indexOf('"', valStartIndex + 1)
+                                    if (valEndIndex != -1) {
+                                        textVal = responseString.substring(valStartIndex + 1, valEndIndex)
+                                            .replace("\\n", " ")
+                                            .replace("\\\"", "\"")
+                                    }
+                                }
+                            }
+                            textVal
+                        }
+                    }
+
+                    val cleanReply = replyRaw.trim()
+                    if (cleanReply.isNotBlank()) {
+                        delay(1200 + Random.nextLong(1500)) // Human-like reaction delay
+                        sendChatMessage(cleanReply)
+                    }
+                } catch (e: Exception) {
+                    onLog("AI responder exception: ${e.localizedMessage}", "ERROR")
+                }
             }
         }
     }
@@ -349,10 +438,30 @@ class MinecraftJavaClient(
         out.flush()
     }
 
+    private fun getProtocolVersion(vString: String): Int {
+        return when (vString.trim()) {
+            "1.21" -> 767
+            "1.20.5", "1.20.6" -> 766
+            "1.20.3", "1.20.4" -> 765
+            "1.20.2" -> 764
+            "1.20", "1.20.1" -> 763
+            "1.19.4" -> 762
+            "1.19.3" -> 761
+            "1.19.1", "1.19.2" -> 760
+            "1.19" -> 759
+            "1.18.2" -> 758
+            "1.18", "1.18.1" -> 757
+            "1.17.1" -> 756
+            "1.17" -> 755
+            "1.16.5" -> 754
+            else -> 765 // Default to 1.20.4
+        }
+    }
+
     private fun LongToBytes(l: Long): ByteArray {
         val result = ByteArray(8)
-        for (i in 7 downTo 0) {
-            result[i] = (l shr (i * 8)).toByte()
+        for (i in 0..7) {
+            result[i] = (l shr ((7 - i) * 8)).toByte()
         }
         return result
     }

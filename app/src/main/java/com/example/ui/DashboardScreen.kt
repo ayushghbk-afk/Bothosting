@@ -39,6 +39,11 @@ import com.example.service.MineBotService
 import com.example.ui.theme.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 
 enum class BotTab {
     DASHBOARD,
@@ -287,6 +292,27 @@ fun DashboardScreen(
                     },
                     onImportScript = { url, onSuccess, onError ->
                         viewModel.importScriptFromGithub(url, onSuccess, onError)
+                    },
+                    onFetchRepo = { urlInput, onSuccess, onError ->
+                        viewModel.fetchGithubRepoContents(urlInput, onSuccess, onError)
+                    },
+                    onAutoCreateBot = { botName, host, port, username ->
+                        viewModel.saveBot(
+                            BotConfig(
+                                name = botName,
+                                serverAddress = host,
+                                serverPort = port,
+                                username = username,
+                                edition = "JAVA",
+                                version = "1.20.4",
+                                scriptsEnabled = true,
+                                antiAfkEnabled = true,
+                                antiAfkType = "CIRCLE"
+                            )
+                        )
+                    },
+                    onGenerateAiScript = { prompt, onSuccess, onError ->
+                        viewModel.generateScriptFromPrompt(prompt, onSuccess, onError)
                     }
                 )
                 BotTab.CONSOLE -> ConsoleTab(
@@ -332,6 +358,116 @@ fun DashboardTab(
                 recentLogMessage = recentLogMessage,
                 onConsoleClick = onConsoleTabClick
             )
+        }
+
+        item {
+            val context = LocalContext.current
+            var isBackgroundOptimized by remember { mutableStateOf(!isBatteryOptimizationsIgnored(context)) }
+            
+            LaunchedEffect(Unit) {
+                while (true) {
+                    isBackgroundOptimized = !isBatteryOptimizationsIgnored(context)
+                    delay(3000)
+                }
+            }
+
+            if (isBackgroundOptimized) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFEF7FF),
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFFE8DEF8)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0xFFE8DEF8)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Battery Warning",
+                                tint = Color(0xFF21005D),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "24/7 Hosting Optimization",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF1D192B)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "To keep Minecraft client sockets alive 24/7 continuously without background termination under Android 15/16, exclude this app from Doze mode constraints.",
+                                fontSize = 11.sp,
+                                color = Color(0xFF49454F),
+                                lineHeight = 16.sp
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    requestIgnoreBatteryOptimizations(context)
+                                    isBackgroundOptimized = !isBatteryOptimizationsIgnored(context)
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF6750A4),
+                                    contentColor = Color.White
+                                ),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Text("WHITELIST BACKGROUND", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFE6F4EA),
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    border = BorderStroke(1.dp, Color(0xFF34A853).copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "Battery Optimized",
+                            tint = Color(0xFF137333),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "24/7 Background Hosting: ACTIVE",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = Color(0xFF137333)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "System battery limitations bypassed. Background sockets run continuous.",
+                                fontSize = 10.sp,
+                                color = Color(0xFF137333).copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         item {
@@ -1047,6 +1183,8 @@ fun ConfigEditorTab(
     var avatarType by remember { mutableStateOf(botConfig?.avatarType ?: "STEVE") }
     var themeColorHex by remember { mutableStateOf(botConfig?.themeColorHex ?: "#6750A4") }
     var customStatus by remember { mutableStateOf(botConfig?.customStatus ?: "READY") }
+    var aiAutoReplyEnabled by remember { mutableStateOf(botConfig?.aiAutoReplyEnabled ?: false) }
+    var aiPersonality by remember { mutableStateOf(botConfig?.aiPersonality ?: "Friendly builder bot who loves mining diamonds") }
 
     var triggersMap by remember(botConfig) {
         val raw = botConfig?.triggerResponses ?: "hi:::Hello! I am online and managing chunks.;;;help:::I am a custom MineBot client. Type messages to chat with me.;;;status:::Host environment: Android Sandbox. Battery: Nominal. CPU: 1.25%."
@@ -1620,6 +1758,62 @@ fun ConfigEditorTab(
         }
 
         item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, BentoBorder, RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp)
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "INTELLIGENT AI AUTO-RESPONDER",
+                                color = Color(0xFF6750A4),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Default
+                            )
+                            Text(
+                                "Uses Gemini to chat dynamically with other server players",
+                                color = Color(0xFF44474E),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Default
+                            )
+                        }
+                        Switch(
+                            checked = aiAutoReplyEnabled,
+                            onCheckedChange = { aiAutoReplyEnabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = Color(0xFF6750A4),
+                                uncheckedThumbColor = Color(0xFF44474E),
+                                uncheckedTrackColor = Color(0xFFF3F4F9)
+                            )
+                        )
+                    }
+
+                    if (aiAutoReplyEnabled) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TextField(
+                            value = aiPersonality,
+                            onValueChange = { aiPersonality = it },
+                            label = { Text("Personality preset (e.g. Sarcastic builder bot)", fontSize = 11.sp) },
+                            colors = textFieldColors(),
+                            textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Default, fontSize = 12.sp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -1655,7 +1849,9 @@ fun ConfigEditorTab(
                                 avatarType = avatarType,
                                 themeColorHex = themeColorHex,
                                 customStatus = customStatus,
-                                triggerResponses = serializedTriggers
+                                triggerResponses = serializedTriggers,
+                                aiAutoReplyEnabled = aiAutoReplyEnabled,
+                                aiPersonality = aiPersonality
                             )
                         )
                     },
@@ -1680,7 +1876,10 @@ fun ScriptEditorTab(
     scripts: List<CustomScript>,
     onSaveScript: (name: String, content: String) -> Unit,
     onDeleteScript: (CustomScript) -> Unit,
-    onImportScript: (url: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit
+    onImportScript: (url: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit,
+    onFetchRepo: (urlInput: String, onSuccess: (List<BotViewModel.GithubRepoFile>) -> Unit, onError: (String) -> Unit) -> Unit,
+    onAutoCreateBot: (name: String, host: String, port: Int, username: String) -> Unit,
+    onGenerateAiScript: (prompt: String, onSuccess: (String) -> Unit, onError: (String) -> Unit) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var content by remember { mutableStateOf("") }
@@ -1690,6 +1889,33 @@ fun ScriptEditorTab(
     var isImporting by remember { mutableStateOf(false) }
     var importError by remember { mutableStateOf<String?>(null) }
     var importSuccessMessage by remember { mutableStateOf<String?>(null) }
+
+    // Repository elements state list
+    var repoFiles by remember { mutableStateOf<List<BotViewModel.GithubRepoFile>>(emptyList()) }
+    var selectedRepoFile by remember { mutableStateOf<String?>(null) }
+
+    // Connection auto extraction
+    var detectedBotInfo by remember { mutableStateOf<BotViewModel.ExtractedBotInfo?>(null) }
+    var detectedFileName by remember { mutableStateOf<String?>(null) }
+    var botCreationStatus by remember { mutableStateOf<String?>(null) }
+
+    // AI Generator States
+    var aiPrompt by remember { mutableStateOf("") }
+    var isGeneratingAi by remember { mutableStateOf(false) }
+    var aiError by remember { mutableStateOf<String?>(null) }
+    var generatedAiCode by remember { mutableStateOf<String?>(null) }
+
+    fun isRepositoryUrl(input: String): Boolean {
+        val trimmed = input.trim().lowercase(java.util.Locale.getDefault())
+        if (trimmed.endsWith(".git")) return true
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            val path = trimmed.substringAfter("github.com/").trim('/')
+            val parts = path.split("/")
+            return parts.size == 2 || (parts.size == 3 && parts[2] == "tree")
+        }
+        val parts = trimmed.split("/")
+        return parts.size == 2
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -1745,7 +1971,7 @@ fun ScriptEditorTab(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        "Paste a raw script link or repository path as 'owner/repo/branch/script.txt' to import it natively into the compiler.",
+                        "Paste a raw script link or a repository URL/path (e.g. 'ayushghbk-afk/Bot.ju') to search and download script code natively.",
                         fontSize = 11.sp,
                         color = Color(0xFF44474E),
                         lineHeight = 16.sp
@@ -1755,7 +1981,7 @@ fun ScriptEditorTab(
                     TextField(
                         value = githubInput,
                         onValueChange = { githubInput = it },
-                        placeholder = { Text("e.g. octocat/Spoon-Knife/main/scripts/automation.txt", color = Color(0xFF44474E).copy(alpha = 0.5f), fontSize = 11.sp) },
+                        placeholder = { Text("e.g. ayushghbk-afk/Bot.ju", color = Color(0xFF44474E).copy(alpha = 0.5f), fontSize = 11.sp) },
                         colors = textFieldColors(),
                         singleLine = true,
                         textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 11.sp),
@@ -1785,27 +2011,61 @@ fun ScriptEditorTab(
                             onClick = {
                                 if (githubInput.isNotBlank()) {
                                     val cleanedUrl = githubInput.trim()
-                                    val finalUrl = if (cleanedUrl.startsWith("http://") || cleanedUrl.startsWith("https://")) {
-                                        cleanedUrl
-                                            .replace("github.com/", "raw.githubusercontent.com/")
-                                            .replace("/blob/", "/")
-                                    } else {
-                                        "https://raw.githubusercontent.com/$cleanedUrl"
-                                    }
                                     isImporting = true
                                     importError = null
                                     importSuccessMessage = null
-                                    onImportScript(finalUrl, { downloadedText ->
-                                        isImporting = false
-                                        content = downloadedText
-                                        val fileName = finalUrl.substringAfterLast("/").substringBefore(".")
-                                        name = "GitHub: " + fileName.substringBefore("?").replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
-                                        importSuccessMessage = "Successfully imported script code!"
-                                        githubInput = ""
-                                    }, { errorMsg ->
-                                        isImporting = false
-                                        importError = errorMsg
-                                    })
+                                    repoFiles = emptyList()
+                                    detectedBotInfo = null
+                                    botCreationStatus = null
+
+                                    val isRepo = isRepositoryUrl(cleanedUrl)
+                                    if (isRepo) {
+                                        onFetchRepo(cleanedUrl, { files ->
+                                            isImporting = false
+                                            repoFiles = files
+                                            if (files.isEmpty()) {
+                                                importError = "No files found in the specified GitHub repository."
+                                            } else {
+                                                importSuccessMessage = "Successfully fetched ${files.size} file(s) in repository! Choose a script below."
+                                            }
+                                        }, { errorMsg ->
+                                            isImporting = false
+                                            importError = errorMsg
+                                        })
+                                    } else {
+                                        val finalUrl = if (cleanedUrl.startsWith("http://") || cleanedUrl.startsWith("https://")) {
+                                            cleanedUrl
+                                                .replace("github.com/", "raw.githubusercontent.com/")
+                                                .replace("/blob/", "/")
+                                        } else {
+                                            "https://raw.githubusercontent.com/$cleanedUrl"
+                                        }
+                                        onImportScript(finalUrl, { downloadedText ->
+                                            isImporting = false
+                                            content = downloadedText
+                                            val fileName = finalUrl.substringAfterLast("/").substringBefore(".")
+                                            name = "GitHub: " + fileName.substringBefore("?").replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+                                            importSuccessMessage = "Successfully imported script code!"
+                                            githubInput = ""
+
+                                            // Parse credentials
+                                            val hostRegex = """host\s*[:=]\s*['"]([^'"]+)['"]""".toRegex()
+                                            val portRegex = """port\s*[:=]\s*(\d+)""".toRegex()
+                                            val usernameRegex = """username\s*[:=]\s*['"]([^'"]+)['"]""".toRegex()
+
+                                            val fileHost = hostRegex.find(downloadedText)?.groupValues?.get(1)
+                                            val filePort = portRegex.find(downloadedText)?.groupValues?.get(1)?.toIntOrNull()
+                                            val fileUsername = usernameRegex.find(downloadedText)?.groupValues?.get(1)
+
+                                            if (fileHost != null || filePort != null || fileUsername != null) {
+                                                detectedBotInfo = BotViewModel.ExtractedBotInfo(fileHost, filePort, fileUsername)
+                                                detectedFileName = fileName
+                                            }
+                                        }, { errorMsg ->
+                                            isImporting = false
+                                            importError = errorMsg
+                                        })
+                                    }
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(
@@ -1856,6 +2116,206 @@ fun ScriptEditorTab(
                             )
                         }
                     }
+
+                    // Display list of repo files when found
+                    if (repoFiles.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            "CHOOSE SCRIPT FILE TO IMPORT:",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF6750A4)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        repoFiles.forEach { file ->
+                            val isSelected = selectedRepoFile == file.name
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (isSelected) Color(0xFFE8DEF8) else Color(0xFFF3F4F9))
+                                    .clickable {
+                                        selectedRepoFile = file.name
+                                        isImporting = true
+                                        importError = null
+                                        importSuccessMessage = null
+                                        detectedBotInfo = null
+                                        onImportScript(file.downloadUrl, { downloadedText ->
+                                            isImporting = false
+                                            content = downloadedText
+                                            val fileNameCleaned = file.name.substringBefore(".")
+                                            name = "GitHub: " + fileNameCleaned.replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.getDefault()) else it.toString() }
+                                            importSuccessMessage = "Successfully imported script code from ${file.name}!"
+
+                                            // Parse credentials
+                                            val hostRegex = """host\s*[:=]\s*['"]([^'"]+)['"]""".toRegex()
+                                            val portRegex = """port\s*[:=]\s*(\d+)""".toRegex()
+                                            val usernameRegex = """username\s*[:=]\s*['"]([^'"]+)['"]""".toRegex()
+
+                                            val fileHost = hostRegex.find(downloadedText)?.groupValues?.get(1)
+                                            val filePort = portRegex.find(downloadedText)?.groupValues?.get(1)?.toIntOrNull()
+                                            val fileUsername = usernameRegex.find(downloadedText)?.groupValues?.get(1)
+
+                                            if (fileHost != null || filePort != null || fileUsername != null) {
+                                                detectedBotInfo = BotViewModel.ExtractedBotInfo(fileHost, filePort, fileUsername)
+                                                detectedFileName = file.name
+                                            }
+                                        }, { errorMsg ->
+                                            isImporting = false
+                                            importError = errorMsg
+                                        })
+                                    }
+                                    .border(
+                                        width = 1.dp,
+                                        color = if (isSelected) Color(0xFF6750A4) else Color.Transparent,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = if (file.name.endsWith(".js")) Icons.Default.Build 
+                                                  else if (file.name.endsWith(".json")) Icons.Default.Settings 
+                                                  else Icons.Default.List,
+                                    contentDescription = "File",
+                                    tint = if (isSelected) Color(0xFF6750A4) else Color(0xFF44474E),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = file.name,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1B1B1F)
+                                    )
+                                    if (file.size > 0) {
+                                        Text(
+                                            text = "${(file.size / 1024.0).toString().take(4)} KB",
+                                            fontSize = 9.sp,
+                                            color = Color(0xFF44474E)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Display extracted Bot credentials
+                    if (detectedBotInfo != null) {
+                        val info = detectedBotInfo!!
+                        val hasHost = !info.host.isNullOrBlank()
+                        val hasPort = info.port != null
+                        val hasUser = !info.username.isNullOrBlank()
+
+                        if (hasHost || hasPort || hasUser) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Card(
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF8E1)),
+                                shape = RoundedCornerShape(16.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .border(1.dp, Color(0xFFFFB300), RoundedCornerShape(16.dp))
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            imageVector = Icons.Default.Star,
+                                            contentDescription = "Extracted Settings Info",
+                                            tint = Color(0xFFFF8F00),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "EXTRACTED BOT CONNECTION CREDENTIALS",
+                                            color = Color(0xFFFF8F00),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 0.5.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Text(
+                                        text = "We discovered virtual connection credentials inside '${detectedFileName ?: "script"}':",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF5D4037)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    if (hasHost) {
+                                        Text(
+                                            text = "📍 Bot Server Address: ${info.host}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Color(0xFF3E2723)
+                                        )
+                                    }
+                                    if (hasPort) {
+                                        Text(
+                                            text = "🔌 Connection Port: ${info.port}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Color(0xFF3E2723)
+                                        )
+                                    }
+                                    if (hasUser) {
+                                        Text(
+                                            text = "👤 Bot Username: ${info.username}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = Color(0xFF3E2723)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Button(
+                                        onClick = {
+                                            val hostVal = info.host ?: "localhost"
+                                            val portVal = info.port ?: 25565
+                                            val userVal = info.username ?: "FlyBot"
+                                            onAutoCreateBot(
+                                                userVal,
+                                                hostVal,
+                                                portVal,
+                                                userVal
+                                            )
+                                            botCreationStatus = "Successfully registered and preconfigured '${userVal}' bot profile in the database!"
+                                            detectedBotInfo = null
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = Color(0xFFFF8F00),
+                                            contentColor = Color.White
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("AUTO-INITIALIZE PLAY BOT PROFILE", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (botCreationStatus != null) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFE8F5E9))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = botCreationStatus ?: "",
+                                color = Color(0xFF2E7D32),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Default
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1887,6 +2347,205 @@ fun ScriptEditorTab(
                         lineHeight = 16.sp,
                         fontFamily = FontFamily.Monospace
                     )
+                }
+            }
+        }
+
+        item {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF3EDF7)),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(2.dp, Color(0xFFD0BCFF), RoundedCornerShape(24.dp))
+            ) {
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Star,
+                            contentDescription = "AI Icon",
+                            tint = Color(0xFF6750A4),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Text(
+                            text = "INTELLIGENT AI SCRIPT COPILOT",
+                            color = Color(0xFF21005D),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Default,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Powered by Gemini 3.5 Flash server-side. Type what your companion bot should perform on the server, and the AI will auto-generate native commands.",
+                        fontSize = 11.sp,
+                        color = Color(0xFF49454F),
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
+                        text = "QUICK AI DIRECTIVES:",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF6750A4)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "Walk in Circle" to "LOOP_START\nSAY /move forward\nDELAY 1000\nSAY /turn right\nDELAY 1000\nLOOP_END",
+                            "Ad Broadcaster" to "LOOP_START\nSAY Join my awesome guild at /warp team!\nDELAY 600000\nLOOP_END",
+                            "Auto Survival AFK" to "LOOP_START\nSAY [AFK] Maintaining live companion session...\nDELAY 3000\nSAY /eat potato\nDELAY 5000\nLOOP_END"
+                        ).forEach { (label, mockCode) ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color.White)
+                                    .clickable {
+                                        aiPrompt = "Create a script that: $label"
+                                        generatedAiCode = mockCode
+                                        aiError = null
+                                    }
+                                    .border(1.dp, Color(0xFFE8DEF8), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(label, fontSize = 10.sp, color = Color(0xFF6750A4), fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    TextField(
+                        value = aiPrompt,
+                        onValueChange = { aiPrompt = it },
+                        placeholder = { Text("Describe actions (e.g., login, type spawn, wait 5 seconds and loop spamming advertisements)", color = Color(0xFF49454F).copy(alpha = 0.5f), fontSize = 11.sp) },
+                        colors = textFieldColors(),
+                        textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Default, fontSize = 11.sp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("ai_prompt_input")
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isGeneratingAi) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = Color(0xFF6750A4),
+                                    strokeWidth = 2.dp
+                                )
+                                Text("Thinking...", fontSize = 11.sp, color = Color(0xFF6750A4))
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.width(1.dp))
+                        }
+
+                        Button(
+                            onClick = {
+                                if (aiPrompt.isNotBlank()) {
+                                    isGeneratingAi = true
+                                    aiError = null
+                                    generatedAiCode = null
+                                    onGenerateAiScript(aiPrompt, { result ->
+                                        isGeneratingAi = false
+                                        generatedAiCode = result
+                                    }, { errorMsg ->
+                                        isGeneratingAi = false
+                                        aiError = errorMsg
+                                    })
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF6750A4),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            enabled = aiPrompt.isNotBlank() && !isGeneratingAi,
+                            modifier = Modifier.testTag("ai_generate_button")
+                        ) {
+                            Text("ASK AI ENGINE", fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    AnimatedVisibility(visible = aiError != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFFFDAD9))
+                                .padding(10.dp)
+                        ) {
+                            Text(
+                                text = "AI Error: ${aiError ?: ""}",
+                                color = Color(0xFFBA1A1A),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(visible = generatedAiCode != null) {
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            Text(
+                                "GENERATED BOT SCRIPTER COMMANDS:",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF21005D)
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF111115), RoundedCornerShape(12.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Text(
+                                    text = generatedAiCode ?: "",
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 11.sp,
+                                    color = Color.White
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = {
+                                    content = generatedAiCode ?: ""
+                                    name = if (aiPrompt.length > 5 && aiPrompt.contains(" ")) {
+                                        aiPrompt.substringAfter("that: ").substringAfter(" ").substringBefore(" ").replaceFirstChar { it.uppercase() } + " Script"
+                                    } else {
+                                        "AI Custom Script"
+                                    }
+                                    generatedAiCode = null
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF21005D),
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("APPLY GENERATED CODE TO CUSTOM EDITOR", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2184,6 +2843,24 @@ fun ConsoleTab(
                 }
 
                 Button(
+                    onClick = {
+                        if (directCommandText.isNotEmpty() && selectedBotId != null) {
+                            val textToSend = directCommandText
+                            directCommandText = ""
+                            viewModel.chatWithAi(selectedBotId, textToSend)
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF6750A4),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("ask_ai_button")
+                ) {
+                    Text("ASK AI", fontFamily = FontFamily.Default, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
+
+                Button(
                     onClick = { viewModel.clearLogs(selectedBotId) },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFFFFEAEC),
@@ -2211,6 +2888,7 @@ fun ConsoleLogLine(log: BotLog) {
         "ERROR" -> TerminalRubyRed
         "CHAT" -> TerminalCyanAccent
         "SCRIPT" -> TerminalGoldYellow
+        "AI" -> Color(0xFFD0BCFF)
         else -> Color(0xFF4ADE80)
     }
 
@@ -2237,7 +2915,7 @@ fun ConsoleLogLine(log: BotLog) {
         // Log Content
         Text(
             text = log.message,
-            color = Color.White,
+            color = if (log.type == "AI") Color(0xFFE6E1E5) else Color.White,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace
         )
@@ -2259,3 +2937,31 @@ fun textFieldColors() = TextFieldDefaults.colors(
 )
 
 fun <T> flowOf(value: T): kotlinx.coroutines.flow.Flow<T> = kotlinx.coroutines.flow.flow { emit(value) }
+
+fun isBatteryOptimizationsIgnored(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    } else {
+        true
+    }
+}
+
+fun requestIgnoreBatteryOptimizations(context: Context) {
+    try {
+        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+            data = Uri.parse("package:${context.packageName}")
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        try {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (ex: Exception) {
+            ex.printStackTrace()
+        }
+    }
+}
